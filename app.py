@@ -1,11 +1,13 @@
 from typing import Union
-from fastapi import FastAPI,Query
+from fastapi import FastAPI,Query,Request,HTTPException
 from fastapi.responses import HTMLResponse
 from pymongo.mongo_client import MongoClient
 from bson import ObjectId
 from pydantic import BaseModel,Field
 from typing import Dict,Optional
 from fastapi.encoders import jsonable_encoder
+from starlette.responses import HTMLResponse
+import redis
 
 class Address(BaseModel):
     city: str
@@ -21,6 +23,38 @@ uri = "mongodb+srv://rohitas:sitaram1@cluster0.5sei3hk.mongodb.net/?retryWrites=
 client = MongoClient(uri)
 db = client["cloud_intern"]
 collection = db["Students"]
+
+redis_client = redis.Redis(
+    host="redis-18863.c330.asia-south1-1.gce.redns.redis-cloud.com", port=18863,
+    username="default",
+    password="EBsbnOG81IQNCO3PbOwGmnDgfPWiJeqK",
+)
+
+@app.middleware("http")
+async def api_rate_limiter(request: Request, call_next):
+    user_id = request.headers['user_id']
+    TIME_DURATION = 60*60*24  # Time duration in seconds (24 hours)
+    RATE_LIMIT = 10      # API calls allowed in TIME_DURATION (Meaning 10 calls permitted in 24 hours)
+
+    cur_count = redis_client.incr(user_id)
+    
+    # If the key is set for the first time, set the expiry time
+    if cur_count == 1:
+        redis_client.expire(user_id, TIME_DURATION)
+    
+    # If the count exceeds the limit, return the response and time left after which the user can make the request.
+    if cur_count > 2*RATE_LIMIT:
+        seconds = redis_client.ttl(user_id)
+        seconds = seconds % (24 * 3600)
+        hour = seconds // 3600
+        seconds %= 3600
+        minutes = seconds // 60
+        seconds %= 60
+        response = HTMLResponse(f'<html><body><h3>Rate Limit exceeded.</h3><h3>Try again in {str(hour)} hours, {str(minutes)} minutes, {str(seconds)} seconds.</h3></body></html>')
+        return response
+    
+    # If the count is within the limit, proceed with the request.
+    return await call_next(request)
 
 
 @app.get("/",response_class=HTMLResponse)
